@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parametric 4D mesh morph</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #05060a;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #wrap {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .overlay-top {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .eqline {
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 12px;
+    color: #bcd;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(0,0,0,0.6);
+  }
+  .panel {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(8,10,16,0.82);
+    padding: 16px 20px 14px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 24px;
+    backdrop-filter: blur(4px);
+    box-sizing: border-box;
+  }
+  .ctrl label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #9aa;
+    font-family: "SF Mono", "Consolas", monospace;
+    margin-bottom: 4px;
+  }
+  .ctrl input[type=range] {
+    width: 100%;
+    accent-color: #7ee7ff;
+  }
+  .buttons {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  button {
+    flex: 1;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #dde;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: rgba(255,255,255,0.14); }
+  button:active { transform: scale(0.98); }
+  #toast {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: rgba(20,24,34,0.92);
+    color: #cfe;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    font-family: -apple-system, sans-serif;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="overlay-top">
+    <div class="eqline">x,y,z,w = f(u,v,t) &middot; 4D rotation</div>
+  </div>
+  <div id="toast">Saved image</div>
+  <div class="panel">
+    <div class="ctrl">
+      <label><span>surface mode</span><span id="vS">torus knot</span></label>
+      <input id="mode" type="range" min="0" max="2" step="1" value="0">
+    </div>
+    <div class="ctrl">
+      <label><span>freq &omega;</span><span id="vF">2.0</span></label>
+      <input id="freq" type="range" min="0.2" max="6" step="0.1" value="2.0">
+    </div>
+    <div class="ctrl">
+      <label><span>4D rotation speed</span><span id="vR">0.5</span></label>
+      <input id="rot" type="range" min="0" max="2" step="0.05" value="0.5">
+    </div>
+    <div class="ctrl">
+      <label><span>wave amplitude</span><span id="vA">0.8</span></label>
+      <input id="amp" type="range" min="0" max="2" step="0.05" value="0.8">
+    </div>
+    <div class="ctrl">
+      <label><span>momentum build</span><span id="vM">0.5</span></label>
+      <input id="mom" type="range" min="0" max="1.5" step="0.05" value="0.5">
+    </div>
+    <div class="ctrl">
+      <label><span>mesh density</span><span id="vD">28</span></label>
+      <input id="dens" type="range" min="12" max="44" step="2" value="28">
+    </div>
+    <div class="buttons">
+      <button id="pulse">Apply impulse</button>
+      <button id="resetbtn">Reset momentum</button>
+      <button id="savebtn">Save as image</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('cv');
+  const ctx = canvas.getContext('2d');
+
+  function resize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    canvas.width = w * devicePixelRatio;
+    canvas.height = h * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const modeEl = document.getElementById('mode');
+  const freqEl = document.getElementById('freq');
+  const rotEl = document.getElementById('rot');
+  const ampEl = document.getElementById('amp');
+  const momEl = document.getElementById('mom');
+  const densEl = document.getElementById('dens');
+  const vS = document.getElementById('vS');
+  const vF = document.getElementById('vF');
+  const vR = document.getElementById('vR');
+  const vA = document.getElementById('vA');
+  const vM = document.getElementById('vM');
+  const vD = document.getElementById('vD');
+  const modeNames = ['torus knot','klein bottle','figure-8 immersion'];
+  modeEl.oninput = () => vS.textContent = modeNames[parseInt(modeEl.value)];
+  freqEl.oninput = () => vF.textContent = parseFloat(freqEl.value).toFixed(1);
+  rotEl.oninput = () => vR.textContent = parseFloat(rotEl.value).toFixed(2);
+  ampEl.oninput = () => vA.textContent = parseFloat(ampEl.value).toFixed(2);
+  momEl.oninput = () => vM.textContent = parseFloat(momEl.value).toFixed(2);
+  densEl.oninput = () => vD.textContent = densEl.value;
+  document.getElementById('pulse').onclick = () => { impulse += 1.4; };
+  document.getElementById('resetbtn').onclick = () => { impulse = 0; momentum = 0; };
+
+  function showToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1600);
+  }
+
+  document.getElementById('savebtn').onclick = () => {
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'parametric-mesh-morph-' + Date.now() + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Saved image');
+    }, 'image/png');
+  };
+
+  function rotate4(p, a1, a2, a3, a4){
+    let [x,y,z,w] = p;
+    let c=Math.cos(a1), s=Math.sin(a1);
+    [x,w] = [x*c - w*s, x*s + w*c];
+    c=Math.cos(a2); s=Math.sin(a2);
+    [y,w] = [y*c - w*s, y*s + w*c];
+    c=Math.cos(a3); s=Math.sin(a3);
+    [z,w] = [z*c - w*s, z*s + w*c];
+    c=Math.cos(a4); s=Math.sin(a4);
+    [x,y] = [x*c - y*s, x*s + y*c];
+    return [x,y,z,w];
+  }
+  function project4(p, dist){
+    const w = 1 / (dist - p[3]);
+    return [p[0]*w*2.4, p[1]*w*2.4, p[2]*w*2.4];
+  }
+  function project3(p, fov, dist){
+    const z = p[2] + dist;
+    const f = fov / z;
+    return [p[0]*f, p[1]*f];
+  }
+
+  function surfacePoint(mode, u, v, t, amp, freq){
+    u = u * Math.PI * 2;
+    v = v * Math.PI * 2;
+    const wob = Math.sin(u*3 + t*freq) * Math.cos(v*2 - t*freq*0.7) * amp * 0.35;
+    if (mode === 0){
+      const p_ = 2, q_ = 3;
+      const r = 0.6 + 0.25*Math.cos(q_*u) + wob*0.4;
+      const x = r*Math.cos(p_*u);
+      const y = r*Math.sin(p_*u);
+      const z = 0.5*Math.sin(q_*u) + 0.4*Math.sin(v*2 + t*freq*0.5)*amp*0.3;
+      const w = 0.5*Math.cos(v*3 - t*freq*0.4) * amp;
+      return [x*1.3, y*1.3, z*1.3, w];
+    } else if (mode === 1){
+      const r = 2.2;
+      let x, y;
+      if (u <= Math.PI){
+        x = r*(3*(1+Math.sin(u)) + 2*(1-Math.cos(u)/2)*Math.cos(u)*Math.cos(v)) * Math.cos(u) / 9;
+        y = r*(8*Math.sin(u))/9;
+      } else {
+        x = r*(3*(1+Math.sin(u)) + 2*(1-Math.cos(u)/2)*Math.cos(v+Math.PI))*Math.cos(u)/9;
+        y = r*8*Math.sin(u)/9;
+      }
+      const z = r*(1-Math.cos(u)/2)*Math.sin(v)/3;
+      const w = wob*1.2 + 0.4*Math.sin(v*2+t*freq*0.6)*amp;
+      return [x*0.7+wob*0.2, y*0.7, z*1.1, w];
+    } else {
+      const a4 = t*freq*0.3;
+      const x = Math.cos(u)*(1 + 0.5*Math.cos(v));
+      const y = Math.sin(u)*(1 + 0.5*Math.cos(v));
+      const z = 0.5*Math.sin(v) + 0.4*Math.sin(2*u + t*freq*0.4)*amp*0.5;
+      const w = 0.6*Math.sin(u*2 - v + a4)*amp + 0.3*Math.cos(v*3+t*freq*0.5)*amp*0.4;
+      return [x*1.2+wob*0.3, y*1.2+wob*0.3, z*1.4, w*1.1];
+    }
+  }
+
+  let t = 0;
+  let momentum = 0;
+  let impulse = 0;
+  const palette = [
+    [126,231,255],
+    [255,126,213],
+    [255,206,86],
+    [126,255,178],
+    [186,126,255]
+  ];
+  function lerpColor(c1, c2, k){
+    return [
+      Math.round(c1[0] + (c2[0]-c1[0])*k),
+      Math.round(c1[1] + (c2[1]-c1[1])*k),
+      Math.round(c1[2] + (c2[2]-c1[2])*k)
+    ];
+  }
+
+  function frame(){
+    const w = window.innerWidth, h = window.innerHeight;
+    ctx.fillStyle = 'rgba(5,6,10,0.20)';
+    ctx.fillRect(0,0,w,h);
+
+    const mode = parseInt(modeEl.value);
+    const freq = parseFloat(freqEl.value);
+    const rotSpeed = parseFloat(rotEl.value);
+    const amp = parseFloat(ampEl.value);
+    const momGain = parseFloat(momEl.value);
+    const density = parseInt(densEl.value);
+
+    momentum += (impulse * 0.02);
+    impulse *= 0.92;
+    momentum = momentum * 0.985 + Math.sin(t*0.7)*0.0006*momGain;
+    momentum = Math.max(0, Math.min(2.2, momentum + momGain*0.0009));
+
+    const colorMix = (Math.sin(t*0.31) + 1) / 2;
+    const intensity = Math.min(1, 0.3 + momentum*0.55);
+
+    const cx = w/2, cy = h/2;
+    const scale = Math.min(w,h) * 0.30;
+
+    const a1 = t * rotSpeed * 0.6;
+    const a2 = t * rotSpeed * 0.4 + momentum*0.5;
+    const a3 = t * rotSpeed * 0.25;
+    const a4 = t * rotSpeed * 0.15 + momentum*0.3;
+
+    const uSteps = density, vSteps = Math.max(8, Math.round(density*0.6));
+    const grid = [];
+    for (let i = 0; i <= uSteps; i++){
+      const row = [];
+      for (let j = 0; j <= vSteps; j++){
+        const u = i/uSteps, v = j/vSteps;
+        const p4 = surfacePoint(mode, u, v, t, amp, freq);
+        const r4 = rotate4(p4, a1, a2, a3, a4);
+        const p3 = project4(r4, 3.0);
+        const [x,y] = project3(p3, scale*2.4, 4.6);
+        row.push([cx+x, cy+y, p3[2], i, j]);
+      }
+      grid.push(row);
+    }
+
+    ctx.lineWidth = 1.1;
+    ctx.shadowBlur = 4 + intensity*12;
+
+    function drawSeg(p1, p2, idx){
+      const depth = (p1[2]+p2[2])/2;
+      const depthK = Math.max(0, Math.min(1, (depth+1.6)/3.2));
+      const baseIdx = idx % palette.length;
+      const nextIdx = (idx+2) % palette.length;
+      const col = lerpColor(palette[baseIdx], palette[nextIdx], colorMix);
+      const glowAmt = 0.22 + intensity*0.78;
+      const alpha = (0.18 + depthK*0.5) * glowAmt;
+      ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha.toFixed(3)})`;
+      ctx.shadowColor = `rgba(${col[0]},${col[1]},${col[2]},${(0.45*glowAmt).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(p1[0],p1[1]);
+      ctx.lineTo(p2[0],p2[1]);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i <= uSteps; i++){
+      for (let j = 0; j <= vSteps; j++){
+        const p = grid[i][j];
+        if (i < uSteps) drawSeg(p, grid[i+1][j], i+j);
+        if (j < vSteps) drawSeg(p, grid[i][j+1], i+j+1);
+      }
+    }
+    ctx.shadowBlur = 0;
+
+    t += 0.014;
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>

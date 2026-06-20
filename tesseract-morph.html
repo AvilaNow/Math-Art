@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tesseract wave morph</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #05060a;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #wrap {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .overlay-top {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .eqline {
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 12px;
+    color: #bcd;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(0,0,0,0.6);
+  }
+  .panel {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(8,10,16,0.82);
+    padding: 16px 20px 14px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 24px;
+    backdrop-filter: blur(4px);
+    box-sizing: border-box;
+  }
+  .ctrl label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #9aa;
+    font-family: "SF Mono", "Consolas", monospace;
+    margin-bottom: 4px;
+  }
+  .ctrl input[type=range] {
+    width: 100%;
+    accent-color: #7ee7ff;
+  }
+  .buttons {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  button {
+    flex: 1;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #dde;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: rgba(255,255,255,0.14); }
+  button:active { transform: scale(0.98); }
+  #toast {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: rgba(20,24,34,0.92);
+    color: #cfe;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    font-family: -apple-system, sans-serif;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div class="overlay-top">
+    <div class="eqline">w = sin(4D rotation) &middot; momentum</div>
+  </div>
+  <div id="toast">Saved image</div>
+  <div class="panel">
+    <div class="ctrl">
+      <label><span>freq &omega;</span><span id="vF">2.0</span></label>
+      <input id="freq" type="range" min="0.2" max="6" step="0.1" value="2.0">
+    </div>
+    <div class="ctrl">
+      <label><span>4D rotation speed</span><span id="vR">0.6</span></label>
+      <input id="rot" type="range" min="0" max="2" step="0.05" value="0.6">
+    </div>
+    <div class="ctrl">
+      <label><span>wave amplitude</span><span id="vA">0.9</span></label>
+      <input id="amp" type="range" min="0" max="2" step="0.05" value="0.9">
+    </div>
+    <div class="ctrl">
+      <label><span>momentum build</span><span id="vM">0.5</span></label>
+      <input id="mom" type="range" min="0" max="1.5" step="0.05" value="0.5">
+    </div>
+    <div class="buttons">
+      <button id="pulse">Apply impulse</button>
+      <button id="resetbtn">Reset momentum</button>
+      <button id="savebtn">Save as image</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('cv');
+  const ctx = canvas.getContext('2d');
+
+  function resize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    canvas.width = w * devicePixelRatio;
+    canvas.height = h * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const N = 4;
+  function genVerts(n){
+    const v = [];
+    for (let i = 0; i < Math.pow(2,n); i++){
+      const p = [];
+      for (let b = 0; b < n; b++) p.push(((i>>b)&1) ? 1 : -1);
+      v.push(p);
+    }
+    return v;
+  }
+  const verts4 = genVerts(N);
+  const edges = [];
+  for (let i = 0; i < verts4.length; i++){
+    for (let j = i+1; j < verts4.length; j++){
+      let diff = 0;
+      for (let k = 0; k < N; k++) if (verts4[i][k] !== verts4[j][k]) diff++;
+      if (diff === 1) edges.push([i,j]);
+    }
+  }
+
+  function rotate4(p, a1, a2, a3){
+    let [x,y,z,w] = p;
+    let c=Math.cos(a1), s=Math.sin(a1);
+    [x,w] = [x*c - w*s, x*s + w*c];
+    c=Math.cos(a2); s=Math.sin(a2);
+    [y,w] = [y*c - w*s, y*s + w*c];
+    c=Math.cos(a3); s=Math.sin(a3);
+    [z,w] = [z*c - w*s, z*s + w*c];
+    return [x,y,z,w];
+  }
+
+  function project(p, dist){
+    const w = 1 / (dist - p[3]);
+    return [p[0]*w*2.4, p[1]*w*2.4, p[2]*w*2.4];
+  }
+  function project3(p, fov, dist){
+    const z = p[2] + dist;
+    const f = fov / z;
+    return [p[0]*f, p[1]*f];
+  }
+
+  const freqEl = document.getElementById('freq');
+  const rotEl = document.getElementById('rot');
+  const ampEl = document.getElementById('amp');
+  const momEl = document.getElementById('mom');
+  const vF = document.getElementById('vF');
+  const vR = document.getElementById('vR');
+  const vA = document.getElementById('vA');
+  const vM = document.getElementById('vM');
+  document.getElementById('pulse').onclick = () => { impulse += 1.4; };
+  document.getElementById('resetbtn').onclick = () => { impulse = 0; momentum = 0; };
+
+  freqEl.oninput = () => vF.textContent = parseFloat(freqEl.value).toFixed(1);
+  rotEl.oninput = () => vR.textContent = parseFloat(rotEl.value).toFixed(2);
+  ampEl.oninput = () => vA.textContent = parseFloat(ampEl.value).toFixed(2);
+  momEl.oninput = () => vM.textContent = parseFloat(momEl.value).toFixed(2);
+
+  function showToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1600);
+  }
+
+  document.getElementById('savebtn').onclick = () => {
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tesseract-morph-' + Date.now() + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Saved image');
+    }, 'image/png');
+  };
+
+  let t = 0;
+  let momentum = 0;
+  let impulse = 0;
+  const palette = [
+    [126,231,255],
+    [255,126,213],
+    [255,206,86],
+    [126,255,178],
+    [186,126,255]
+  ];
+  function lerpColor(c1, c2, k){
+    return [
+      Math.round(c1[0] + (c2[0]-c1[0])*k),
+      Math.round(c1[1] + (c2[1]-c1[1])*k),
+      Math.round(c1[2] + (c2[2]-c1[2])*k)
+    ];
+  }
+
+  function frame(){
+    const w = window.innerWidth, h = window.innerHeight;
+    ctx.fillStyle = 'rgba(5,6,10,0.22)';
+    ctx.fillRect(0,0,w,h);
+
+    const freq = parseFloat(freqEl.value);
+    const rotSpeed = parseFloat(rotEl.value);
+    const amp = parseFloat(ampEl.value);
+    const momGain = parseFloat(momEl.value);
+
+    momentum += (impulse * 0.02);
+    impulse *= 0.92;
+    momentum = momentum * (0.985) + Math.sin(t*0.7)*0.0006*momGain;
+    momentum = Math.max(0, Math.min(2.2, momentum + momGain*0.0009));
+
+    const colorMix = (Math.sin(t*0.31) + 1) / 2;
+    const intensity = Math.min(1, 0.35 + momentum*0.5);
+
+    const cx = w/2, cy = h/2;
+    const scale = Math.min(w,h) * 0.30;
+
+    const a1 = t * rotSpeed * 0.6;
+    const a2 = t * rotSpeed * 0.4 + momentum*0.5;
+    const a3 = t * rotSpeed * 0.25;
+
+    const pts3 = verts4.map((v, idx) => {
+      const phase = idx * 0.7;
+      const waveDisp = Math.sin(t*freq + phase + momentum*2) * amp * 0.3;
+      const vp = [v[0]*(1+waveDisp*0.15), v[1]*(1+waveDisp*0.15), v[2]*(1+waveDisp*0.15), v[3]*(1+waveDisp*0.15)];
+      const r4 = rotate4(vp, a1, a2, a3);
+      const p3 = project(r4, 2.6);
+      return p3;
+    });
+
+    const pts2 = pts3.map(p => {
+      const [x,y] = project3(p, scale*2.2, 4.2);
+      return [cx + x, cy + y, p[2]];
+    });
+
+    ctx.lineWidth = 1.4;
+    edges.forEach(([i,j], idx) => {
+      const p1 = pts2[i], p2 = pts2[j];
+      const depth = (p1[2] + p2[2]) / 2;
+      const depthK = Math.max(0, Math.min(1, (depth + 1.5) / 3));
+      const baseIdx = idx % palette.length;
+      const nextIdx = (idx+2) % palette.length;
+      const col = lerpColor(palette[baseIdx], palette[nextIdx], colorMix);
+      const glowAmt = 0.25 + intensity*0.75;
+      const alpha = (0.25 + depthK*0.55) * glowAmt;
+      ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha.toFixed(3)})`;
+      ctx.shadowBlur = 6 + intensity*14;
+      ctx.shadowColor = `rgba(${col[0]},${col[1]},${col[2]},${(0.5*glowAmt).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(p1[0], p1[1]);
+      ctx.lineTo(p2[0], p2[1]);
+      ctx.stroke();
+    });
+    ctx.shadowBlur = 0;
+
+    pts2.forEach((p, idx) => {
+      const col = palette[idx % palette.length];
+      const r = 2 + intensity*2.5;
+      ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${(0.5+intensity*0.5).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], r, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    t += 0.016;
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
